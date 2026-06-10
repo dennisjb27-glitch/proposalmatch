@@ -284,4 +284,211 @@
     .export-btn { background: #00e676; }
     .approve-btn { background: #4caf50; }
     .reject-btn { background: #f44336; }
-    .approve-btn:h
+    .approve-btn:hover { background: #45a049; }
+    .reject-btn:hover { background: #da190b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>PROPOSAL<span class="match">MATCH</span><br><small style="font-size: 12px; letter-spacing: 3px; color: #666;">PROCUREMENT INTELLIGENCE</small></h1>
+      <div class="status">
+        <span class="status-dot"></span> SISTEMA ACTIVO
+      </div>
+    </header>
+
+    <section style="margin-bottom: 40px;">
+      <h2 style="font-family: 'Bebas Neue'; font-size: 14px; letter-spacing: 2px; margin-bottom: 20px; color: #888;">01 – CARGA TUS PROPUESTAS</h2>
+      
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">⬆️</div>
+        <h2>ARRASTRA LOS PDF AQUÍ</h2>
+        <p>o haz clic para seleccionar archivos</p>
+        <p style="font-size: 11px; margin-top: 10px; color: #666;">PDF • Máximo 10 archivos • Texto digital</p>
+      </div>
+
+      <div class="file-list" id="fileList"></div>
+      <button onclick="analyzeProposals()" id="analyzeBtn" disabled>ANALIZAR PROPUESTAS</button>
+    </section>
+
+    <div class="loading" id="loading">
+      <div class="loader"><div class="loader-bar"></div></div>
+      <p style="color: #888;">Procesando propuestas...</p>
+    </div>
+
+    <div class="results" id="results"></div>
+
+    <div class="comparison-table" id="comparisonTable" style="display: none; margin-top: 40px;">
+      <table id="table"></table>
+    </div>
+
+    <div class="criteria-panel" id="criteriaPanel" style="display: none;">
+      <h3 style="font-family: 'Bebas Neue'; letter-spacing: 2px; margin-bottom: 20px;">AJUSTAR CRITERIOS</h3>
+      <div id="criteriaSliders"></div>
+      <div class="weight-display" id="weightDisplay"></div>
+    </div>
+
+    <div class="collaboration-panel" id="collaborationPanel" style="display: none;">
+      <h3 style="font-family: 'Bebas Neue'; letter-spacing: 2px; margin-bottom: 20px;">COLABORACIÓN</h3>
+      <input type="text" id="stakeholderName" placeholder="Tu nombre (stakeholder)">
+      <div id="collaborationContent"></div>
+    </div>
+
+    <button onclick="exportReport()" id="exportBtn" class="export-btn" style="display: none; margin-top: 40px;">DESCARGAR REPORTE</button>
+    <button onclick="resetApp()" style="display: none; margin-top: 20px; background: #666;">NUEVA EVALUACIÓN</button>
+  </div>
+
+  <script>
+    let selectedFiles = [];
+    let proposals = [];
+    const criteria = {
+      precioUnitario: 50,
+      plazoEntrega: 20,
+      volumenMinimo: 10,
+      terminosPago: 10,
+      certificaciones: 5,
+      confiabilidad: 5
+    };
+
+    const uploadZone = document.getElementById('uploadZone');
+    uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', e => {
+      e.preventDefault();
+      uploadZone.classList.remove('dragover');
+      selectedFiles = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+      updateFileList();
+    });
+    uploadZone.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.accept = '.pdf';
+      input.onchange = e => {
+        selectedFiles = Array.from(e.target.files);
+        updateFileList();
+      };
+      input.click();
+    });
+
+    function updateFileList() {
+      const fileList = document.getElementById('fileList');
+      fileList.innerHTML = selectedFiles.map(f => `<div class="file-pill">${f.name}</div>`).join('');
+      document.getElementById('analyzeBtn').disabled = selectedFiles.length === 0;
+    }
+
+    async function analyzeProposals() {
+      if (selectedFiles.length === 0) return;
+      document.getElementById('loading').classList.add('active');
+      
+      const formData = new FormData();
+      selectedFiles.forEach(f => formData.append('pdfs', f));
+
+      try {
+        const response = await fetch('/api/analyze', { method: 'POST', body: formData });
+        const data = await response.json();
+        proposals = data.proposals || [];
+        displayResults();
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        document.getElementById('loading').classList.remove('active');
+      }
+    }
+
+    function displayResults() {
+      const results = document.getElementById('results');
+      results.innerHTML = proposals.map((p, i) => {
+        const score = calculateScore(p);
+        return `
+          <div class="score-card">
+            <h3>${p.proveedor}</h3>
+            <span class="rank-badge">#${i + 1}</span>
+            <div class="score-value" style="--width: ${score}%">${score.toFixed(0)}</div>
+            <div class="bar"><div class="bar-fill" style="--width: ${score}%"></div></div>
+          </div>
+        `;
+      }).join('');
+      document.getElementById('criteriaPanel').style.display = 'block';
+      document.getElementById('collaborationPanel').style.display = 'block';
+      document.getElementById('comparisonTable').style.display = 'block';
+      document.getElementById('exportBtn').style.display = 'block';
+      displayTable();
+      displayCollaboration();
+    }
+
+    function calculateScore(proposal) {
+      let score = 0;
+      if (proposal.precioUnitario) score += (1 - Math.min(proposal.precioUnitario / 10000, 1)) * criteria.precioUnitario;
+      if (proposal.plazoEntrega) score += (1 - Math.min(proposal.plazoEntrega / 60, 1)) * criteria.plazoEntrega;
+      if (proposal.volumenMinimo) score += (1 - Math.min(proposal.volumenMinimo / 50000, 1)) * criteria.volumenMinimo;
+      if (proposal.terminosPago) score += 5;
+      if (proposal.certificaciones !== 'Sin especificar') score += criteria.certificaciones;
+      score += criteria.confiabilidad;
+      return Math.min(score, 100);
+    }
+
+    function displayTable() {
+      const table = document.getElementById('table');
+      const headers = ['Proveedor', 'Precio', 'Plazo', 'Vol. Mín', 'Términos', 'Certificaciones', 'Confiabilidad'];
+      table.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+      proposals.forEach(p => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${p.proveedor}</td>
+          <td>$${p.precioUnitario || 'N/A'}</td>
+          <td>${p.plazoEntrega || 'N/A'} días</td>
+          <td>${p.volumenMinimo || 'N/A'}</td>
+          <td>${p.terminosPago}</td>
+          <td>${p.certificaciones}</td>
+          <td><input type="number" value="${p.confiabilidad}" min="0" max="10"></td>
+        `;
+        table.appendChild(row);
+      });
+    }
+
+    function displayCollaboration() {
+      const content = document.getElementById('collaborationContent');
+      content.innerHTML = proposals.map(p => `
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #2a2a2a;">
+          <h4>${p.proveedor}</h4>
+          <input type="text" placeholder="Agregar comentario..." style="width: 100%; margin-top: 10px;">
+          <div style="margin-top: 10px; gap: 10px; display: flex;">
+            <button class="approve-btn" onclick="alert('Aprobado: ${p.proveedor}')">APROBAR</button>
+            <button class="reject-btn" onclick="alert('Rechazado: ${p.proveedor}')">RECHAZAR</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function exportReport() {
+      let report = 'PROPOSALMATCH - REPORTE DE ANÁLISIS\n\n';
+      proposals.forEach((p, i) => {
+        report += `${i + 1}. ${p.proveedor}\n`;
+        report += `   Precio: $${p.precioUnitario || 'N/A'}\n`;
+        report += `   Plazo: ${p.plazoEntrega || 'N/A'} días\n`;
+        report += `   Vol. Mín: ${p.volumenMinimo || 'N/A'}\n`;
+        report += `   Certificaciones: ${p.certificaciones}\n\n`;
+      });
+      const blob = new Blob([report], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'proposalmatch-report.txt';
+      a.click();
+    }
+
+    function resetApp() {
+      selectedFiles = [];
+      proposals = [];
+      document.getElementById('fileList').innerHTML = '';
+      document.getElementById('results').innerHTML = '';
+      document.getElementById('analyzeBtn').disabled = true;
+      document.getElementById('criteriaPanel').style.display = 'none';
+      document.getElementById('collaborationPanel').style.display = 'none';
+      document.getElementById('comparisonTable').style.display = 'none';
+      document.getElementById('exportBtn').style.display = 'none';
+    }
+  </script>
+</body>
+</html>
