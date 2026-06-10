@@ -101,4 +101,129 @@ function extractPaymentTerms(text) {
   ];
   for (const p of patterns) {
     const m = t.match(p);
-    if (m) retur
+    if (m) return m[1].trim().substring(0, 60);
+  }
+  return 'Según negociación';
+}
+
+function extractCertifications(text) {
+  const found = new Set();
+  const checks = [
+    [/ISO\s*9001/i, 'ISO 9001'],
+    [/ISO\s*14001/i, 'ISO 14001'],
+    [/ISO\s*45001/i, 'ISO 45001'],
+    [/ISO\s*22000/i, 'ISO 22000'],
+    [/\bGMP\b/i, 'GMP'],
+    [/\bHACCP\b/i, 'HACCP'],
+    [/\bFSC\b/i, 'FSC'],
+    [/\bGAP\b/i, 'GAP'],
+    [/\bUSDA\b/i, 'USDA'],
+    [/\bFDA\b/i, 'FDA'],
+    [/registro\s*(?:sanitario|ica|invima|agroquímico)/i, 'Registro Sanitario'],
+    [/permiso\s*(?:de\s*)?(?:importación|exportación)/i, 'Permiso Importación'],
+    [/licencia\s*(?:de\s*)?(?:funcionamiento|comercial)/i, 'Licencia Comercial'],
+  ];
+  for (const [re, label] of checks) {
+    if (re.test(text)) found.add(label);
+  }
+  return found.size > 0 ? [...found].join(', ') : 'Sin especificar';
+}
+
+function extractProviderName(text, filename) {
+  const t = text.replace(/\n/g, ' ');
+  const patterns = [
+    /empresa[:\s]+([A-ZÁ-Ú][^.\n,]{3,40})/i,
+    /compañ[ií]a[:\s]+([A-ZÁ-Ú][^.\n,]{3,40})/i,
+    /proveedor[:\s]+([A-ZÁ-Ú][^.\n,]{3,40})/i,
+    /razón\s*social[:\s]+([^.\n,]{3,50})/i,
+  ];
+  for (const p of patterns) {
+    const m = t.match(p);
+    if (m) return m[1].trim().substring(0, 50);
+  }
+  return path.parse(filename).name.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function parseProposal(text, filename) {
+  return {
+    proveedor:      extractProviderName(text, filename),
+    precioUnitario: extractPrice(text),
+    plazoEntrega:   extractDelivery(text),
+    volumenMinimo:  extractMinVolume(text),
+    terminosPago:   extractPaymentTerms(text),
+    certificaciones: extractCertifications(text),
+    confiabilidad:  7,
+    comments:       []
+  };
+}
+
+app.post('/api/analyze', upload.array('pdfs', 10), async (req, res) => {
+  if (!req.files || req.files.length === 0)
+    return res.status(400).json({ error: 'No se recibieron archivos PDF.' });
+
+  const results = [];
+  const errors  = [];
+  const filesToDelete = [];
+
+  try {
+    for (const file of req.files) {
+      try {
+        filesToDelete.push(file.path);
+        const data     = await pdf(require('fs').readFileSync(file.path));
+        const proposal = parseProposal(data.text, file.originalname);
+        results.push(proposal);
+      } catch (e) {
+        errors.push({ file: file.originalname, msg: e.message });
+      }
+    }
+
+    if (results.length === 0)
+      return res.status(422).json({ error: 'No se pudo extraer texto de los PDFs.', errors });
+
+    res.json({ proposals: results, errors });
+
+    setImmediate(() => {
+      filesToDelete.forEach(file => {
+        try { fs.unlinkSync(file); } catch (e) {}
+      });
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+    filesToDelete.forEach(file => {
+      try { fs.unlinkSync(file); } catch (err) {}
+    });
+  }
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.listen(PORT, () => {
+  console.log(`✓ ProposalMatch corriendo en puerto ${PORT}`);
+  console.log(`✓ Limpieza de archivos temporales cada 30 minutos`);
+});
+
+setInterval(() => {
+  try {
+    const files = fs.readdirSync(tempDir);
+    const now = Date.now();
+    files.forEach(file => {
+      const filePath = path.join(tempDir, file);
+      const stats = fs.statSync(filePath);
+      if (now - stats.mtimeMs > 30 * 60 * 1000) {
+        fs.unlinkSync(filePath);
+      }
+    });
+  } catch (e) {}
+}, 30 * 60 * 1000);
+
+process.on('SIGTERM', () => {
+  console.log('Apagando servidor...');
+  try {
+    const files = fs.readdirSync(tempDir);
+    files.forEach(f => fs.unlinkSync(path.join(tempDir, f)));
+  } catch (e) {}
+  process.exit(0);
+});
